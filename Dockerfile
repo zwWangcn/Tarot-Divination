@@ -1,29 +1,36 @@
-# === Stage 1: Build Stage ===
-FROM node:20-alpine AS builder
+# Stage 1: Build stage
+FROM node:20-slim AS builder
 WORKDIR /app
 
-# Copy package configuration files and install all dependencies
+# Copy package configuration files
 COPY package*.json ./
+
+# Install all dependencies (including devDependencies for build)
 RUN npm ci
 
-# Copy all source files and build
+# Copy the rest of the application code
 COPY . .
+
+# Run the production build (compiles client assets and bundles server.ts to dist/server.cjs)
 RUN npm run build
 
-# === Stage 2: Run Stage ===
-FROM node:20-alpine
+# Stage 2: Production stage
+FROM node:20-slim
 WORKDIR /app
-ENV NODE_ENV=production
 
-# Install only production dependencies (since server packages are marked external in esbuild)
+# Ensure production environment variables
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Copy package files and install ONLY production dependencies
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy built artifacts from builder stage
+# Copy built application assets from the builder stage
 COPY --from=builder /app/dist ./dist
 
-# Expose port 3000 (which is the default PORT, though Cloud Run dynamically overrides this)
+# Expose port 3000 (Cloud Run will route traffic to this port)
 EXPOSE 3000
 
-# Start the application
-CMD ["npm", "start"]
+# Start the full-stack server
+CMD ["node", "dist/server.cjs"]
