@@ -3,15 +3,416 @@ import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import cors from "cors";
+import morgan from "morgan";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
+const resolvedFilename = typeof __filename !== 'undefined' ? __filename : (import.meta && import.meta.url ? fileURLToPath(import.meta.url) : "");
+const resolvedDirname = typeof __dirname !== 'undefined' ? __dirname : (resolvedFilename ? path.dirname(resolvedFilename) : process.cwd());
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
+// Setup Middlewares
+app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan("dev"));
 
-// In-memory reading sessions cache
+// Ensure the static uploads directory exists
+const uploadsDir = path.join(resolvedDirname, "public", "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Serve uploaded images statically
+app.use("/uploads", express.static(uploadsDir));
+
+// Initialize the Google GenAI SDK to use Vertex AI / Agent Platform API
+const vertexAiApiKey = process.env.GOOGLE_CLOUD_API_KEY || process.env.GEMINI_API_KEY;
+
+if (!vertexAiApiKey) {
+  console.warn("⚠️  WARNING: Neither GOOGLE_CLOUD_API_KEY nor GEMINI_API_KEY environment variables are defined.");
+}
+
+console.log(`[Tarot Backend] Initializing GenAI Client using Agent Platform API (Vertex AI) with your API key.`);
+
+const vertexAi = new GoogleGenAI({
+  apiKey: vertexAiApiKey,
+  vertexai: true
+});
+
+// Core logic configuration from Google Agent Platform
+const siText1 = {
+  text: `A single tarot card illustration, full card face only, no table, no cloth, no background, isolated on pure white. The card has a decorative border frame. Subject: [Read from user input, e.g. The Moon / The Fool / Ten of Swords]. Style: detailed hand-drawn illustration, intricate linework, symbolic imagery, rich in allegory. Colors: deep jewel tones. No watermark, no text overlay, no table surface, card only, clean edges, centered composition. s`
+};
+
+const tools = [
+  {
+    googleSearch: {},
+  },
+  {
+    googleMaps: {}
+  },
+];
+
+const toolConfig = {
+  retrievalConfig: {
+    languageCode: "en_US",
+  },
+};
+
+// Set up generation config for Gemini 3.5 Flash
+const generationConfig: any = {
+  maxOutputTokens: 65535,
+  temperature: 1,
+  topP: 0.95,
+  thinkingConfig: {
+    thinkingLevel: "MEDIUM" as const,
+  },
+  safetySettings: [
+    {
+      category: 'HARM_CATEGORY_HATE_SPEECH' as const,
+      threshold: 'OFF' as const,
+    },
+    {
+      category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as const,
+      threshold: 'OFF' as const,
+    },
+    {
+      category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as const,
+      threshold: 'OFF' as const,
+    },
+    {
+      category: 'HARM_CATEGORY_HARASSMENT' as const,
+      threshold: 'OFF' as const,
+    }
+  ],
+  tools: tools,
+  toolConfig: toolConfig,
+  systemInstruction: {
+    parts: [siText1]
+  },
+};
+
+/**
+ * Health check & Info endpoint
+ */
+app.get("/api/cards/health", (req, res) => {
+  res.json({
+    message: "🔮 Themed Tarot Card Game Backend API",
+    status: "active",
+    endpoints: {
+      generate: "POST /api/cards/generate",
+      interpret: "POST /api/cards/interpret",
+      uploads: "GET /uploads/:filename"
+    }
+  });
+});
+
+// Full Collection of 78 Tarot Cards (Major Arcana + Minor Arcana)
+const TAROT_COLLECTION = [
+  // Major Arcana (22 cards)
+  "The Fool", "The Magician", "The High Priestess", "The Empress", "The Emperor", 
+  "The Hierophant", "The Lovers", "The Chariot", "Strength", "The Hermit", 
+  "Wheel of Fortune", "Justice", "The Hanged Man", "Death", "Temperance", 
+  "The Devil", "The Tower", "The Star", "The Moon", "The Sun", "Judgement", "The World",
+  
+  // Suit of Wands (14 cards)
+  "Ace of Wands", "Two of Wands", "Three of Wands", "Four of Wands", "Five of Wands", 
+  "Six of Wands", "Seven of Wands", "Eight of Wands", "Nine of Wands", "Ten of Wands", 
+  "Page of Wands", "Knight of Wands", "Queen of Wands", "King of Wands",
+  
+  // Suit of Cups (14 cards)
+  "Ace of Cups", "Two of Cups", "Three of Cups", "Four of Cups", "Five of Cups", 
+  "Six of Cups", "Seven of Cups", "Eight of Cups", "Nine of Cups", "Ten of Cups", 
+  "Page of Cups", "Knight of Cups", "Queen of Cups", "King of Cups",
+  
+  // Suit of Swords (14 cards)
+  "Ace of Swords", "Two of Swords", "Three of Swords", "Four of Swords", "Five of Swords", 
+  "Six of Swords", "Seven of Swords", "Eight of Swords", "Nine of Swords", "Ten of Swords", 
+  "Page of Swords", "Knight of Swords", "Queen of Swords", "King of Swords",
+  
+  // Suit of Pentacles (14 cards)
+  "Ace of Pentacles", "Two of Pentacles", "Three of Pentacles", "Four of Pentacles", "Five of Pentacles", 
+  "Six of Pentacles", "Seven of Pentacles", "Eight of Pentacles", "Nine of Pentacles", "Ten of Pentacles", 
+  "Page of Pentacles", "Knight of Pentacles", "Queen of Pentacles", "King of Pentacles"
+];
+
+// Helper to select 3 distinct random cards from the deck
+function getRandomCards(count = 3) {
+  const shuffled = [...TAROT_COLLECTION].sort(() => 0.5 - Math.random());
+  return shuffled.slice(0, count);
+}
+
+// In-memory job registry to track generation states by request_id
+interface TarotJobCard {
+  name: string;
+  status: "pending" | "processing" | "completed" | "error";
+  url: string | null;
+  error: string | null;
+}
+
+interface TarotJob {
+  request_id: string;
+  status: "processing" | "success" | "error";
+  prompt: string;
+  cards: TarotJobCard[];
+}
+
+const jobs = new Map<string, TarotJob>();
+
+/**
+ * Parallel background execution worker for a single card in a request queue.
+ * Resolves the user prompt with the selected tarot archetype, generates the card face, and saves it.
+ */
+async function generateSingleCardBackground(
+  request_id: string,
+  cardIndex: number,
+  prompt: string,
+  cardName: string,
+  host: string,
+  protocol: string
+) {
+  const job = jobs.get(request_id);
+  if (!job) return;
+
+  const card = job.cards[cardIndex];
+  card.status = "processing";
+
+  try {
+    console.log(`[Tarot Background] Request "${request_id}": Starting card generation for index ${cardIndex} ("${cardName}")...`);
+
+    // Construct the direct prompt exactly as specified, resolving the Subject placeholder
+    const directPrompt = `A single tarot card illustration, full card face only, no table, no cloth, no background, isolated on pure white. The card has a decorative border frame. Subject: ${cardName}. Style: detailed hand-drawn illustration, intricate linework, symbolic imagery, rich in allegory. Colors: deep jewel tones. No watermark, no text overlay, no table surface, card only, clean edges, centered composition.`;
+
+    console.log(`[Tarot Background] Request "${request_id}", Card ${cardIndex} ("${cardName}") direct prompt:\n"${directPrompt}"\n`);
+    console.log(`[Tarot Background] Request "${request_id}", Card ${cardIndex} ("${cardName}") sending directly to Imagen 3...`);
+
+    // Invoke Imagen 3 directly to generate the card face
+    const response = await vertexAi.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: directPrompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: "image/png",
+        aspectRatio: "3:4" // Tarot vertical aspect ratio
+      }
+    });
+
+    if (!response || !response.generatedImages || response.generatedImages.length === 0) {
+      throw new Error(`The Imagen SDK did not return any image buffers for "${cardName}".`);
+    }
+
+    // 3. Save the image buffer to disk asynchronously
+    const imgBytes = response.generatedImages[0].image.imageBytes;
+    const buffer = Buffer.from(imgBytes, "base64");
+
+    const filename = `card_${request_id}_${cardIndex}.png`;
+    const filePath = path.join(uploadsDir, filename);
+
+    await fs.promises.writeFile(filePath, buffer);
+
+    // 4. Update memory state with the final public image URL
+    const url = `${protocol}://${host}/uploads/${filename}`;
+    card.url = url;
+    card.status = "completed";
+
+    console.log(`[Tarot Background] Request "${request_id}": Card ${cardIndex} ("${cardName}") successfully generated! URL: ${url}`);
+
+  } catch (error: any) {
+    console.error(`[Tarot Background] Error on request "${request_id}" card ${cardIndex} ("${cardName}"):`, error);
+    card.status = "error";
+    card.error = error.message;
+  } finally {
+    // Check if all 3 parallel card jobs for this request are completed or errored
+    const allFinished = job.cards.every(c => c.status === "completed" || c.status === "error");
+    if (allFinished) {
+      const allCompleted = job.cards.every(c => c.status === "completed");
+      job.status = allCompleted ? "success" : "error";
+      console.log(`[Tarot Background] Request "${request_id}": All parallel card jobs finished. Overall job status: "${job.status}" (allCompleted: ${allCompleted})`);
+    }
+  }
+}
+
+/**
+ * Card Image Generation Endpoint
+ * POST /api/cards/generate
+ */
+app.post("/api/cards/generate", (req, res) => {
+  const { prompt, request_id } = req.body;
+
+  // Validate incoming parameters
+  if (!prompt || typeof prompt !== "string") {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing or invalid 'prompt' field. It must be a non-empty string.",
+      card_images: []
+    });
+  }
+
+  if (!request_id || typeof request_id !== "string") {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing or invalid 'request_id' field. It must be a non-empty string.",
+      card_images: []
+    });
+  }
+
+  // Case 1: Job already exists (subsequent polling call)
+  if (jobs.has(request_id)) {
+    const job = jobs.get(request_id);
+    if (!job) {
+      return res.status(500).json({ status: "error", message: "Job state corrupt", card_images: [] });
+    }
+
+    // Format all 3 card slots, returning completed card URLs or empty objects
+    const cardImages = job.cards.map(c => {
+      if (c.status === "completed" && c.url) {
+        return { url: c.url };
+      }
+      return {};
+    });
+
+    const completedCount = job.cards.filter(c => c.status === "completed").length;
+    console.log(`[Tarot API] Polling request_id "${request_id}": returning ${completedCount}/3 completed images. Status: "${job.status}"`);
+
+    return res.status(200).json({
+      status: job.status, // "processing", "success", or "error"
+      card_images: cardImages
+    });
+  }
+
+  // Case 2: Job does not exist (first-time call)
+  // Randomly select 3 distinct cards from the 78 tarot cards
+  const selectedCards = getRandomCards(3);
+
+  // Initialize the job representation in memory
+  const jobState: TarotJob = {
+    request_id,
+    status: "processing",
+    prompt,
+    cards: selectedCards.map(name => ({
+      name,
+      status: "pending",
+      url: null,
+      error: null
+    }))
+  };
+
+  jobs.set(request_id, jobState);
+
+  // Capture current request context variables to pass into background worker threads
+  const host = req.get("host") || "localhost:3000";
+  const protocol = req.protocol || "http";
+
+  console.log(`[Tarot API] First call for request_id "${request_id}". Selected Tarot cards: [ ${selectedCards.join(", ")} ]`);
+  console.log(`[Tarot API] Spawning 3 parallel card generation jobs in background. Returning instantly...`);
+
+  // Fire-and-forget parallel background worker calls (DO NOT await them so API returns instantly)
+  for (let i = 0; i < selectedCards.length; i++) {
+    generateSingleCardBackground(request_id, i, prompt, selectedCards[i], host, protocol);
+  }
+
+  // Return instantly to the client with exactly 3 empty objects representing the pending generations
+  return res.status(200).json({
+    status: "processing",
+    card_images: [{}, {}, {}]
+  });
+});
+
+/**
+ * Tarot Card Spread Interpretation Endpoint
+ * POST /api/cards/interpret
+ */
+app.post("/api/cards/interpret", async (req, res) => {
+  const { request_id } = req.body;
+
+  if (!request_id || typeof request_id !== "string") {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing or invalid 'request_id' field. It must be a non-empty string."
+    });
+  }
+
+  // Retrieve the job state associated with this request_id
+  const job = jobs.get(request_id);
+  if (!job) {
+    return res.status(404).json({
+      status: "error",
+      message: `No active tarot session found for request_id "${request_id}". Please generate the cards first.`
+    });
+  }
+
+  const prompt = job.prompt;
+  const cardNames = job.cards.map(c => c.name);
+
+  try {
+    console.log(`[Tarot API] Requesting interpretation for request_id "${request_id}" based on cards: [${cardNames.join(", ")}] and theme: "${prompt}"`);
+
+    // Prepare the user content matching the system prompt parameters
+    const userPromptContent = `Reading Topic: "${prompt}"
+
+Positions and Cards:
+- Past: ${cardNames[0]}
+- Present: ${cardNames[1]}
+- Future: ${cardNames[2]}`;
+
+    // Invoke Gemini 3.5 Flash using the exact system prompt
+    const modelResponse = await vertexAi.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: [
+        { role: 'user', parts: [{ text: userPromptContent }] }
+      ],
+      config: {
+        temperature: 0.95,
+        systemInstruction: {
+          parts: [{ text: `You are a concise tarot card reader. When given a reading topic and three tarot cards in their positions (Past, Present, Future), you interpret their combined meaning clearly and directly.
+
+Rules:
+- Use simple, modern language. No archaic or overly mystical phrasing.
+- Each card interpretation: 2–3 sentences max.
+- The synthesis section: 3–4 sentences, connecting all three cards to the topic.
+- Output strictly in Markdown with the section headers provided:
+  ## Past
+  ## Present
+  ## Future
+  ## Synthesis
+- Do not add disclaimers, caveats, or "remember tarot is not..." notes.
+- Do not repeat the card names in the headers.` }]
+        }
+      }
+    });
+
+    const interpretation = modelResponse.text;
+    if (!interpretation) {
+      throw new Error("Gemini failed to generate an interpretation.");
+    }
+
+    console.log(`[Tarot API] Successfully generated interpretation for request_id "${request_id}".`);
+
+    return res.status(200).json({
+      status: "success",
+      request_id,
+      theme: prompt,
+      cards: cardNames,
+      interpretation: interpretation
+    });
+
+  } catch (error: any) {
+    console.error(`[Tarot API] Error generating interpretation for request_id "${request_id}":`, error);
+    return res.status(500).json({
+      status: "error",
+      message: "An internal server error occurred while generating the Tarot interpretation.",
+      details: error.message
+    });
+  }
+});
+
+// Original In-memory reading sessions cache for /api/tarot SPA
 interface ReadingSession {
   status: "LOADING" | "DONE" | "ERROR";
   request_id: string;
@@ -24,6 +425,7 @@ interface ReadingSession {
     nameJa: string;
     isReversed: boolean;
     position: "past" | "present" | "future";
+    url?: string;
   }[];
   interpretation?: string;
   error?: string;
@@ -171,6 +573,65 @@ const cardKeywords: Record<string, {
   }
 };
 
+/**
+ * Background worker to generate a custom card-face image using Gemini 3.5 Flash for prompt expansion
+ * and Imagen 3.0 for generating high-fidelity woodcut/copperplate-style images.
+ */
+async function generateCardImageForSession(
+  request_id: string,
+  cardIndex: number,
+  prompt: string,
+  cardName: string,
+  host: string,
+  protocol: string
+) {
+  const session = sessions.get(request_id);
+  if (!session) return;
+
+  try {
+    console.log(`[Tarot Session Background] Request "${request_id}": Starting card face image generation for index ${cardIndex} ("${cardName}")...`);
+
+    // Construct the direct prompt exactly as specified, resolving the Subject placeholder
+    const directPrompt = `A single tarot card illustration, full card face only, no table, no cloth, no background, isolated on pure white. The card has a decorative border frame. Subject: ${cardName}. Style: detailed hand-drawn illustration, intricate linework, symbolic imagery, rich in allegory. Colors: deep jewel tones. No watermark, no text overlay, no table surface, card only, clean edges, centered composition.`;
+
+    console.log(`[Tarot Session Background] Request "${request_id}", Card ${cardIndex} ("${cardName}") direct prompt:\n"${directPrompt}"\n`);
+    console.log(`[Tarot Session Background] Request "${request_id}", Card ${cardIndex} ("${cardName}") sending directly to Imagen 3...`);
+
+    // Invoke Imagen 3 directly to generate the card face
+    const response = await vertexAi.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: directPrompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: "image/png",
+        aspectRatio: "3:4" // Tarot vertical aspect ratio
+      }
+    });
+
+    if (!response || !response.generatedImages || response.generatedImages.length === 0) {
+      throw new Error(`The Imagen SDK did not return any image buffers for "${cardName}".`);
+    }
+
+    // 3. Save the image buffer to disk asynchronously
+    const imgBytes = response.generatedImages[0].image.imageBytes;
+    const buffer = Buffer.from(imgBytes, "base64");
+
+    const filename = `card_session_${request_id}_${cardIndex}.png`;
+    const filePath = path.join(uploadsDir, filename);
+
+    await fs.promises.writeFile(filePath, buffer);
+
+    // 4. Update memory state with the final public image URL
+    const url = `${protocol}://${host}/uploads/${filename}`;
+    session.cards[cardIndex].url = url;
+
+    console.log(`[Tarot Session Background] Request "${request_id}": Card ${cardIndex} ("${cardName}") successfully generated! URL: ${url}`);
+
+  } catch (error: any) {
+    console.error(`[Tarot Session Background] Error on request "${request_id}" card ${cardIndex} ("${cardName}"):`, error);
+  }
+}
+
 // Initiate Tarot Reading endpoint
 app.post("/api/tarot", (req, res) => {
   const { prompt, cards, lang } = req.body;
@@ -305,7 +766,7 @@ Please deliver a gorgeous, deeply detailed Tarot reading with the texture and wi
     } catch (err: any) {
       console.error("Gemini API Error:", err);
       session.interpretation = buildFallbackReading(prompt, sessionCards, activeLang) + 
-        (activeLang === "en" ? "\n\n*(Note: Star channels congested. Activated ancient fallback scroll)*" : activeLang === "ja" ? "\n\n*(注：星界チャネル混雑のため、代替古文書にて対応します)*" : "\n\n*(注：由于星际信道拥堵，已为您启用古典备用占卜书卷)*");
+        (activeLang === "en" ? "\n\n*(Note: Star channels congested. Activated ancient fallback scroll)*" : activeLang === "ja" ? "\n\n*(注：星界チャネル混雑のため、代替古文書にて対応します)*" : "\n\n*(注：由于星际信道拥拥堵，已为您启用古典备用占卜书卷)*");
       session.status = "DONE";
     }
     sessions.set(request_id, session);
@@ -457,7 +918,11 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Tarot Server listening on http://localhost:${PORT}`);
+    console.log(`================================================================`);
+    console.log(`🔮 Themed Tarot Backend Server is active on port: ${PORT}`);
+    console.log(`🚀 Base URL: http://localhost:${PORT}`);
+    console.log(`📸 Generation Endpoint: http://localhost:${PORT}/api/cards/generate`);
+    console.log(`================================================================`);
   });
 }
 

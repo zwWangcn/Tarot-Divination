@@ -3,10 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { 
   Sparkles, 
-  HelpCircle, 
-  Send, 
+  HelpCircle,
   RefreshCw, 
-  Info, 
   ArrowRight, 
   Moon, 
   BookOpen, 
@@ -19,19 +17,17 @@ import {
 
 import CosmicBackground from './components/CosmicBackground';
 import CardBackSvg from './components/CardBackSvg';
-import CardFrontSvg from './components/CardFrontSvg';
-import DivinationLoading from './components/DivinationLoading';
-import { MAJOR_ARCANA } from './data/tarotCards';
 import { TRANSLATIONS } from './i18n';
-import { TarotCard, SelectedCardState, TarotReadingResponse } from './types';
+import { MAJOR_ARCANA } from './data/tarotCards';
+import { TarotCard } from './types';
 
 export default function App() {
   // App Language State: Simplified Chinese, English, Japanese
   const [lang, setLang] = useState<'zh' | 'en' | 'ja'>('zh');
   const dict = TRANSLATIONS[lang];
 
-  // App Phase States
-  const [step, setStep] = useState<'input' | 'pick' | 'loading' | 'result'>('input');
+  // App Phase States: 'input', 'pick', or 'result'
+  const [step, setStep] = useState<'input' | 'pick' | 'result'>('input');
   
   // User Prompt State
   const [prompt, setPrompt] = useState('');
@@ -41,28 +37,28 @@ export default function App() {
   
   // User Selection State (indices of selected cards from the 12 displayed)
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
-  
-  // Confirmed Selected Cards in order [Past, Present, Future]
-  const [finalCards, setFinalCards] = useState<SelectedCardState[]>([]);
-  
-  // Polling State
+
+  // Polling / Generation States
   const [requestId, setRequestId] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [interpretation, setInterpretation] = useState<string>('');
-  
-  // Result card flipping states
-  const [flippedCards, setFlippedCards] = useState<boolean[]>([false, false, false]);
+  const [cardImages, setCardImages] = useState<(string | null)[]>([null, null, null]);
+  const [interpreting, setInterpreting] = useState<boolean>(false);
 
-  // Shuffle 12 random cards from the 22 Major Arcana on load or reset
+  // Enlarged Image Modal State
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+
+  // Initialize and clear state
   const initDeck = () => {
     const shuffled = [...MAJOR_ARCANA].sort(() => Math.random() - 0.5);
     setDeck(shuffled.slice(0, 12));
     setSelectedIndices([]);
-    setFinalCards([]);
-    setFlippedCards([false, false, false]);
     setPollError(null);
     setInterpretation('');
     setRequestId(null);
+    setCardImages([null, null, null]);
+    setInterpreting(false);
+    setEnlargedImage(null);
   };
 
   useEffect(() => {
@@ -95,29 +91,35 @@ export default function App() {
     setStep('pick');
   };
 
-  // Submit selected cards and prompt to backend API
+  // Generate a random ID for requests
+  const generateUniqueId = () => {
+    return 'tarot_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+  };
+
+  // Start image generation and background interpretation immediately
   const handleStartReading = async () => {
     if (selectedIndices.length !== 3) return;
 
-    setStep('loading');
+    // Reset results state
+    setPollError(null);
+    setInterpretation('');
+    setCardImages([null, null, null]);
+    setInterpreting(true);
+    setStep('result'); // Move directly to result page all at once!
 
-    const chosenCards = selectedIndices.map((idx) => deck[idx]);
+    const reqId = generateUniqueId();
+    setRequestId(reqId);
 
     try {
-      const response = await fetch('/api/tarot', {
+      // 1. Initial call to trigger card selection and start background generation
+      const response = await fetch('http://localhost:3000/api/cards/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           prompt: prompt,
-          lang: lang,
-          cards: chosenCards.map((c) => ({
-            id: c.id,
-            nameEn: c.nameEn,
-            nameZh: c.nameZh,
-            nameJa: c.nameJa,
-          })),
+          request_id: reqId,
         }),
       });
 
@@ -131,11 +133,12 @@ export default function App() {
         );
       }
 
-      const data: TarotReadingResponse = await response.json();
-      setRequestId(data.request_id);
-      
-      // Start polling status
-      startPolling(data.request_id);
+      // Start polling status immediately for progressive image loading
+      startPolling(reqId);
+
+      // 2. Parallel call to get interpretation in background
+      getInterpretation(reqId);
+
     } catch (err: any) {
       console.error(err);
       setPollError(
@@ -143,18 +146,28 @@ export default function App() {
         (lang === 'en' 
           ? 'Network lost. Check your cosmic frequency connection.' 
           : lang === 'ja'
-            ? '通信が切断されました。宇宙の調和度を確認してください。'
+            ? '通信が切断されました。宇宙的調和を確認してください。'
             : '网络连接失败，请检查您的宇宙频率。')
       );
-      setStep('result');
+      setInterpreting(false);
     }
   };
 
-  // Polling status from backend
+  // Polling status from backend for image progressive loading
   const startPolling = (id: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/tarot/status?id=${id}`);
+        const res = await fetch('http://localhost:3000/api/cards/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt: prompt,
+            request_id: id,
+          }),
+        });
+
         if (!res.ok) {
           throw new Error(
             lang === 'en' 
@@ -165,59 +178,74 @@ export default function App() {
           );
         }
 
-        const data: TarotReadingResponse = await res.json();
+        const data = await res.json();
         
-        if (data.status === 'DONE') {
-          clearInterval(interval);
+        if (data.card_images && Array.isArray(data.card_images)) {
+          const updatedImages = data.card_images.map((img: any) => img.url || null);
+          setCardImages(updatedImages);
           
-          // Re-map the received cards with full TarotCard definitions from client DB
-          if (data.cards) {
-            const mappedCards: SelectedCardState[] = data.cards.map((srvCard) => {
-              const fullCard = MAJOR_ARCANA.find((m) => m.id === srvCard.id) || MAJOR_ARCANA[0];
-              return {
-                card: fullCard,
-                isReversed: srvCard.isReversed,
-                isFlipped: false,
-                position: srvCard.position,
-              };
-            });
-            setFinalCards(mappedCards);
+          // Check if all images are generated (i.e. none are null) or status is success/error
+          const allLoaded = updatedImages.every((url: string | null) => url !== null);
+          if (allLoaded || data.status === 'success' || data.status === 'error') {
+            clearInterval(interval);
+            console.log("Polling complete, all images fetched or status resolved:", data.status);
           }
-          
-          setInterpretation(data.interpretation || '');
-          setStep('result');
-        } else if (data.status === 'ERROR') {
-          clearInterval(interval);
-          setPollError(
-            data.error || 
-            (lang === 'en' 
-              ? 'The ritual encountered an obstacle.' 
-              : lang === 'ja'
-                ? '神託儀式の最中に何らかの障害が発生しました。'
-                : '占卜仪轨遭遇阻碍，请重试。')
-          );
-          setStep('result');
         }
       } catch (err: any) {
         console.error(err);
         clearInterval(interval);
         setPollError(
           lang === 'en' 
-            ? 'Stellar portal disconnected. Please return and re-summon.' 
+            ? 'Stellar portal disconnected during image generation.' 
             : lang === 'ja'
-              ? '星の回廊との同調が途切れました。戻って再試行してください。'
-              : '星空连接断开，请返回主页重新呼唤。'
+              ? '画像生成中に星の回廊との同調が途切れました。'
+              : '图片生成过程中星空连接断开。'
         );
-        setStep('result');
       }
     }, 1500); // Poll every 1.5s
   };
 
-  // Flip result card
-  const handleFlipResultCard = (index: number) => {
-    const newFlipped = [...flippedCards];
-    newFlipped[index] = !newFlipped[index];
-    setFlippedCards(newFlipped);
+  // Call parallel interpret API
+  const getInterpretation = async (id: string) => {
+    try {
+      const res = await fetch('http://localhost:3000/api/cards/interpret', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          request_id: id,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(
+          lang === 'en'
+            ? 'The sacred text deciphering has halted.'
+            : lang === 'ja'
+              ? '神聖なテクストの解読が停止しました。'
+              : '圣典解读中断。'
+        );
+      }
+
+      const data = await res.json();
+      if (data.status === 'success' && data.interpretation) {
+        setInterpretation(data.interpretation);
+      } else {
+        throw new Error(data.message || 'Interpretation failed');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setInterpretation(
+        lang === 'en'
+          ? '## Deciphering Error\nThe cosmic connection was lost while compiling the reading.'
+          : lang === 'ja'
+            ? '## 解読エラー\n神託のコンパイル中に宇宙との接続が失われました。'
+            : '## 解读错误\n编译占卜结果时与宇宙的连接丢失。'
+      );
+    } finally {
+      setInterpreting(false);
+    }
   };
 
   // Restart divination
@@ -225,6 +253,9 @@ export default function App() {
     initDeck();
     setStep('input');
   };
+
+  // Check if all images have finished loading (i.e. none are null)
+  const allImagesLoaded = cardImages.every((url) => url !== null);
 
   return (
     <div className="relative min-h-screen w-full flex flex-col justify-between items-center z-10 px-4 md:px-8 py-6 select-none overflow-y-auto">
@@ -381,7 +412,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {/* STEP 2: CARD PICKING */}
+          {/* STEP 2: CARD PICKING (INTERMEDIATE SCREEN) */}
           {step === 'pick' && (
             <motion.div
               key="pick"
@@ -491,20 +522,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {/* STEP 3: RITUAL LOADING (POLLING) */}
-          {step === 'loading' && (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="w-full flex justify-center items-center py-8"
-            >
-              <DivinationLoading lang={lang} />
-            </motion.div>
-          )}
-
-          {/* STEP 4: RESULT PAGE WITH 3D FLIPPING */}
+          {/* STEP 3: RESULT PAGE WITH PROGRESSIVE IMAGE LOADING */}
           {step === 'result' && (
             <motion.div
               key="result"
@@ -540,16 +558,35 @@ export default function App() {
                     <p className="text-stone-400 text-xs md:text-sm mt-3 font-serif leading-relaxed">
                       {dict.revelationSub} <span className="text-[#f4ba70] font-semibold">“{prompt}”</span>
                     </p>
-                    <p className="text-[#dfa35c]/70 text-[10px] font-serif mt-4.5 tracking-wide flex items-center justify-center gap-1.5 border border-[#b48257]/20 bg-[#1c1411]/80 px-4 py-2 rounded-full inline-block shadow-sm">
-                      <Sparkles className="w-3.5 h-3.5 animate-pulse text-[#dfa35c]" />
-                      <span>{dict.clickUnveil}</span>
-                    </p>
+                    
+                    {allImagesLoaded ? (
+                      <p className="text-[#56b081]/80 text-[10px] font-serif mt-4.5 tracking-wide flex items-center justify-center gap-1.5 border border-[#56b081]/30 bg-[#101b15]/80 px-4 py-2 rounded-full inline-block shadow-sm">
+                        <Sparkles className="w-3.5 h-3.5 text-[#56b081]" />
+                        <span>
+                          {lang === 'en' 
+                            ? 'ALL IMAGES ENGRAVED. REVELATION COMPLETE.' 
+                            : lang === 'ja' 
+                              ? 'すべての刻印完了。神託が顕現しました。' 
+                              : '星轨画卷蚀刻完毕，神谕显现。'}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-[#dfa35c]/70 text-[10px] font-serif mt-4.5 tracking-wide flex items-center justify-center gap-1.5 border border-[#b48257]/20 bg-[#1c1411]/80 px-4 py-2 rounded-full inline-block shadow-sm">
+                        <Sparkles className="w-3.5 h-3.5 animate-pulse text-[#dfa35c]" />
+                        <span>
+                          {lang === 'en' 
+                            ? 'IMAGE GENERATION & INTERPRETATION IN PROGRESS...' 
+                            : lang === 'ja' 
+                              ? '画像生成および神託リーディングの同調中...' 
+                              : '蚀刻印像与星轨神谕同步印刻中...'}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
-                  {/* 3 Results Cards with 3D flip animation */}
+                  {/* 3 Results Cards displaying all at once progressively */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 md:gap-8 w-full max-w-3xl px-4 mb-12">
-                    {finalCards.map((item, idx) => {
-                      const isFlipped = flippedCards[idx];
+                    {cardImages.map((imageUrl, idx) => {
                       const posLabel = idx === 0 
                         ? (lang === 'en' ? 'Past' : lang === 'ja' ? '過去 (Past)' : '过去 (Past)') 
                         : idx === 1 
@@ -568,42 +605,65 @@ export default function App() {
                             {posLabel}
                           </div>
 
-                          {/* 3D Flip Container */}
+                          {/* Card Frame (No interactive scale or translations!) */}
                           <div 
-                            className="w-full max-w-[200px] aspect-[3/4] perspective-1000 cursor-pointer relative group"
-                            onClick={() => handleFlipResultCard(idx)}
+                            className="w-full max-w-[200px] aspect-[3/4] relative rounded-xl overflow-hidden shadow-2xl bg-[#0c0a09]"
                             id={`result-card-container-${idx}`}
                           >
-                            <motion.div
-                              animate={{ rotateY: isFlipped ? 180 : 0 }}
-                              transition={{ duration: 0.6, ease: 'easeInOut' }}
-                              className="w-full h-full transform-style-3d relative"
-                            >
-                              {/* CARD BACK (Front view before flip) */}
-                              <div className="absolute inset-0 backface-hidden z-10 w-full h-full">
-                                <CardBackSvg />
-                                {/* Overlay hover copper gleam */}
-                                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-[#b48257]/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-                              </div>
-
-                              {/* CARD FRONT (Back view before flip, shown flipped 180 degrees) */}
-                              <div className="absolute inset-0 backface-hidden rotate-y-180 w-full h-full">
-                                <CardFrontSvg card={item.card} isReversed={item.isReversed} lang={lang} />
-                              </div>
-                            </motion.div>
+                            <AnimatePresence mode="wait">
+                              {imageUrl ? (
+                                <motion.div
+                                  key="front"
+                                  initial={{ opacity: 0, scale: 0.95 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: 0.8, ease: 'easeOut' }}
+                                  className="w-full h-full cursor-zoom-in relative group"
+                                  onClick={() => setEnlargedImage(imageUrl)}
+                                >
+                                  <img 
+                                    src={imageUrl} 
+                                    alt={`Tarot Card ${idx}`} 
+                                    className="w-full h-full object-cover rounded-xl border border-[#b48257]/50 shadow-[0_12px_36px_-12px_rgba(180,130,87,0.4)]"
+                                  />
+                                  {/* Subtle Click to Enlarge Hover Badge overlay */}
+                                  <div className="absolute inset-0 bg-[#0e0c0a]/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center z-10 rounded-xl">
+                                    <span className="text-[9px] tracking-widest text-[#f4ba70] border border-[#b48257]/50 bg-[#161210]/90 px-2.5 py-1.5 rounded font-serif uppercase shadow-lg">
+                                      {lang === 'en' ? 'Click to Enlarge' : lang === 'ja' ? '拡大表示' : '点击放大'}
+                                    </span>
+                                  </div>
+                                </motion.div>
+                              ) : (
+                                <motion.div
+                                  key="back"
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  className="w-full h-full relative"
+                                >
+                                  <CardBackSvg />
+                                  <div className="absolute inset-0 bg-[#0e0c0a]/65 backdrop-blur-[1px] flex flex-col justify-center items-center z-20 p-4">
+                                    <RefreshCw className="w-8 h-8 text-[#dfa35c] animate-spin mb-3" />
+                                    <span className="text-[9px] tracking-[0.2em] text-[#f4ba70] font-serif uppercase animate-pulse text-center">
+                                      {lang === 'en' ? 'ENGRAVING...' : lang === 'ja' ? '刻印中...' : '契合蚀刻中...'}
+                                    </span>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
                         </div>
                       );
                     })}
                   </div>
 
-                  {/* Written Interpretation Block */}
-                  {interpretation && (
+                  {/* Written Interpretation Block - WAITS FOR ALL IMAGES TO BE FULLY LOADED */}
+                  {allImagesLoaded && (interpreting || interpretation) && (
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.3, duration: 0.8 }}
-                      className="w-full max-w-3xl bg-gradient-to-b from-[#14100e]/95 to-[#090706]/98 border border-[#b48257]/30 rounded-2xl p-6 md:p-10 shadow-2xl relative overflow-hidden"
+                      transition={{ delay: 0.1, duration: 0.8 }}
+                      className="w-full max-w-3xl bg-gradient-to-b from-[#14100e]/95 to-[#090706]/98 border border-[#b48257]/30 rounded-2xl p-6 md:p-10 shadow-2xl relative overflow-hidden mt-8"
                       id="tarot-result-interpretation"
                     >
                       {/* Artistic Antique Corner brackets */}
@@ -621,22 +681,47 @@ export default function App() {
                         <div className="w-12 h-[1px] bg-gradient-to-l from-transparent to-[#b48257]/60" />
                       </div>
 
-                      {/* Rendered markdown reading */}
-                      <div className="markdown-body text-stone-200 leading-relaxed font-serif text-sm md:text-base space-y-4">
-                        <ReactMarkdown>{interpretation}</ReactMarkdown>
-                      </div>
+                      {interpreting && !interpretation ? (
+                        /* Beautiful Mystical Codex Loading State */
+                        <div className="flex flex-col items-center justify-center py-12 px-4 space-y-6">
+                          <div className="relative w-16 h-16 flex items-center justify-center">
+                            <Sparkles className="w-8 h-8 text-[#f4ba70] animate-pulse absolute" />
+                            <div className="absolute inset-0 border-2 border-dashed border-[#b48257]/30 rounded-full animate-spin-slow" />
+                            <div className="absolute inset-2 border border-[#b48257]/20 rounded-full animate-reverse-orbit" />
+                          </div>
+                          <div className="text-center space-y-2">
+                            <h4 className="font-serif text-[#dfa35c] text-sm tracking-[0.15em] font-semibold uppercase animate-pulse">
+                              {lang === 'en' ? 'TRANSCRIBING CELESTIAL CODEX...' : lang === 'ja' ? '星の聖典を解読中...' : '天体圣卷编纂解译中...'}
+                            </h4>
+                            <p className="text-stone-400 text-xs font-serif max-w-sm mx-auto leading-relaxed">
+                              {lang === 'en' 
+                                ? 'Consulting the astral planes to stitch your destiny spread together. Please remain in quiet meditation.' 
+                                : lang === 'ja'
+                                  ? '運命の糸を紡ぎ合わせるため、星々の軌道を巡っています。静かに黙想してお待ちください。'
+                                  : '正在呼唤星轨之灵织补你的命运卷轴，请保持内心的宁静与共鸣。'}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Rendered markdown reading */
+                        <div className="markdown-body text-stone-200 leading-relaxed font-serif text-sm md:text-base space-y-4">
+                          <ReactMarkdown>{interpretation}</ReactMarkdown>
+                        </div>
+                      )}
 
-                      {/* Reset Divination trigger */}
-                      <div className="mt-12 flex justify-center border-t border-[#b48257]/20 pt-8">
-                        <button
-                          onClick={handleReset}
-                          className="px-8 py-3.5 rounded-xl font-serif text-xs md:text-sm tracking-[0.2em] font-bold bg-gradient-to-r from-[#b48257] to-[#9c6a41] hover:from-[#cda379] hover:to-[#b48257] border border-[#f4ba70]/30 text-[#0d0908] cursor-pointer shadow-lg hover:scale-[1.01] transition-all duration-300 flex items-center space-x-2 uppercase"
-                          id="restart-divination-btn"
-                        >
-                          <RotateCcw className="w-4 h-4 text-[#0d0908]" />
-                          <span>{dict.restartBtn}</span>
-                        </button>
-                      </div>
+                      {/* Reset Divination trigger (only show if not interpreting or if interpretation is done) */}
+                      {!interpreting && interpretation && (
+                        <div className="mt-12 flex justify-center border-t border-[#b48257]/20 pt-8">
+                          <button
+                            onClick={handleReset}
+                            className="px-8 py-3.5 rounded-xl font-serif text-xs md:text-sm tracking-[0.2em] font-bold bg-gradient-to-r from-[#b48257] to-[#9c6a41] hover:from-[#cda379] hover:to-[#b48257] border border-[#f4ba70]/30 text-[#0d0908] cursor-pointer shadow-lg hover:scale-[1.01] transition-all duration-300 flex items-center space-x-2 uppercase"
+                            id="restart-divination-btn"
+                          >
+                            <RotateCcw className="w-4 h-4 text-[#0d0908]" />
+                            <span>{dict.restartBtn}</span>
+                          </button>
+                        </div>
+                      )}
                     </motion.div>
                   )}
                 </>
@@ -646,6 +731,51 @@ export default function App() {
 
         </AnimatePresence>
       </main>
+
+      {/* Lightbox / Modal for Enlarged Card Image */}
+      <AnimatePresence>
+        {enlargedImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#070504]/90 backdrop-blur-md cursor-zoom-out"
+            onClick={() => setEnlargedImage(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="relative max-w-full max-h-[85vh] aspect-[3/4] rounded-2xl overflow-hidden border border-[#b48257]/50 shadow-2xl bg-[#0c0a09] p-1 cursor-default"
+              onClick={(e) => e.stopPropagation()} // Prevent close on clicking image container itself
+            >
+              {/* Ornate corner overlays for premium alchemical aesthetic */}
+              <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-[#f4ba70]/60 pointer-events-none" />
+              <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-[#f4ba70]/60 pointer-events-none" />
+              <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-[#f4ba70]/60 pointer-events-none" />
+              <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-[#f4ba70]/60 pointer-events-none" />
+
+              <img 
+                src={enlargedImage} 
+                alt="Enlarged Tarot Card" 
+                className="w-full h-full object-contain rounded-xl"
+              />
+
+              {/* Close Button overlay */}
+              <button
+                onClick={() => setEnlargedImage(null)}
+                className="absolute top-3 right-3 bg-[#161210]/90 border border-[#b48257]/45 hover:border-[#f4ba70] text-[#dfa35c] hover:text-[#ffdca8] rounded-full p-2.5 transition-all duration-300 shadow-md cursor-pointer flex items-center justify-center"
+                aria-label="Close"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Decorative Mystical Footer */}
       <footer className="w-full max-w-5xl text-center border-t border-[#b48257]/15 pt-4 mt-8 z-10 flex flex-col md:flex-row justify-between items-center text-[9.5px] text-stone-500 gap-2 font-serif">
