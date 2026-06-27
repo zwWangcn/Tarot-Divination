@@ -1,0 +1,6 @@
+{
+  "name": "Tarot Divination",
+  "description": "An elegant, mystical full-stack Tarot Card reading application powered by Gemini AI, featuring immersive card picking, 3D card flips, and cosmic interpretations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

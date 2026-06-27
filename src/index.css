@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-serif: 'Cinzel', Georgia, serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --color-gold-50: #fbf8eb;
+  --color-gold-100: #f4ebb3;
+  --color-gold-200: #eadb84;
+  --color-gold-300: #dec555;
+  --color-gold-400: #d4af37;
+  --color-gold-500: #b59228;
+  --color-gold-600: #93711d;
+  
+  --animate-star-flicker: star-flicker 3s ease-in-out infinite;
+  --animate-orbit: orbit 120s linear infinite;
+  --animate-reverse-orbit: reverse-orbit 80s linear infinite;
+  --animate-pulse-slow: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes star-flicker {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.9; }
+}
+
+@keyframes orbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes reverse-orbit {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+/* Custom Utilities */
+.text-glow {
+  text-shadow: 0 0 10px rgba(212, 175, 55, 0.4), 0 0 2px rgba(212, 175, 55, 0.8);
+}
+
+.box-glow {
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.15), inset 0 0 10px rgba(212, 175, 55, 0.05);
+}
+
+.box-glow-hover:hover {
+  box-shadow: 0 0 25px rgba(212, 175, 55, 0.35), inset 0 0 15px rgba(212, 175, 55, 0.1);
+}
+
+/* Card flip animation */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+
+/* Beautiful custom markdown styling for tarot interpretation */
+.markdown-body {
+  font-family: 'Inter', sans-serif;
+  color: #e2e8f0;
+  line-height: 1.8;
+}
+
+.markdown-body h2 {
+  font-family: 'Cinzel', serif;
+  color: #d4af37;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+  padding-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+.markdown-body h3 {
+  font-family: 'Cinzel', serif;
+  color: #eadb84;
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body p {
+  margin-bottom: 1.25rem;
+  text-align: justify;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #d4af37;
+  padding-left: 1rem;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 1.5rem 0;
+  background: rgba(212, 175, 55, 0.03);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.markdown-body ul {
+  list-style-type: circle;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.markdown-body li {
+  margin-bottom: 0.5rem;
+}
+
+.markdown-body strong {
+  color: #f4ebb3;
+  font-weight: 600;
+}
+
+.markdown-body hr {
+  border-color: rgba(212, 175, 55, 0.15);
+  margin: 2rem 0;
+}
+
