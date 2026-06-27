@@ -239,7 +239,7 @@ export default function App() {
             <h1 className="font-serif text-xl md:text-2xl font-bold tracking-[0.2em] text-[#f4ba70] uppercase">
               {dict.headerTitle}
             </h1>
-            <p className="text-[7.5px] tracking-[0.3em] text-[#b48257]/60 font-serif uppercase">STARDUST CHALCOGRAPHY</p>
+            <p className="text-[7.5px] tracking-[0.3em] text-[#b48257]/60 font-serif uppercase">STARDUST CELESTIAL ORACLE</p>
           </div>
         </div>
 

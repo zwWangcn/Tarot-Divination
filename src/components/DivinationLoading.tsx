@@ -29,25 +29,25 @@ const MYSTICAL_QUOTES = {
 
 const RITUAL_STEPS = {
   zh: [
-    "正在开启古铜占卜仪轨...",
-    "正在链接深层潜意识星盘...",
+    "正在开启塔罗神谕仪轨...",
+    "正在连结深层潜意识星盘...",
     "正在召唤四大炼金元素...",
-    "正在镌刻大阿尔卡那启示...",
-    "正在铜板拓印命运书卷，请保持内心宁静..."
+    "正在唤醒大阿尔卡那启示...",
+    "正在编制星轨命运书卷，请保持内心宁静..."
   ],
   en: [
-    "Opening the ancient engraved oracle...",
-    "Connecting to the subconscious astrolabe...",
+    "Opening the sacred Tarot oracle...",
+    "Connecting to the deep subconscious astrolabe...",
     "Summoning the four alchemical elements...",
-    "Etching the major arcana revelation...",
-    "Printing the fate scrolls from the copper plate, remain still..."
+    "Awakening the major arcana revelation...",
+    "Weaving the fate scrolls of the starry orbits, remain still..."
   ],
   ja: [
-    "古代銅版の占術儀式を開始しています...",
+    "タロットの神託儀式を開始しています...",
     "潜在意識のアストロラーベと同調中...",
     "四大錬金元素の力を召喚しています...",
-    "大アルカナの啓示を銅板に刻み込んでいます...",
-    "運命の書巻を銅版画に刷り上げています。静かにお待ちください..."
+    "大アルカナの啓示を呼び起こしています...",
+    "星界の軌道から運命の書巻を紡ぎ出しています。静かにお待ちください..."
   ]
 };
 
